@@ -1,0 +1,6 @@
+.env
+node_modules/
+recordings/
+screenshots/
+*.mp4
+*.png 
