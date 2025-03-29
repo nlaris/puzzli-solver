@@ -37,16 +37,16 @@ const playwright_1 = require("playwright");
 const fs = __importStar(require("fs/promises"));
 const instagram_private_api_1 = require("instagram-private-api");
 const dotenv = __importStar(require("dotenv"));
-const utils_js_1 = require("./utils.js");
+const utils_1 = require("./utils");
 dotenv.config();
 let globalShareText = null;
+let globalVideoPath = null;
 let globalScreenshotPath = `screenshots/completed-puzzle_${new Date().toLocaleString("en-US", { timeZone: "America/New_York" })
     .split(',')[0]
     .replace(/\//g, '_')}.png`;
-async function uploadToInstagram(videoPath, page) {
+async function uploadToInstagram(videoPath) {
     const ig = new instagram_private_api_1.IgApiClient();
     try {
-        // Basic Instagram setup
         console.log('Logging in as:', process.env.IG_USERNAME);
         ig.state.generateDevice(process.env.IG_USERNAME);
         if (!process.env.IG_USERNAME || !process.env.IG_PASSWORD) {
@@ -58,17 +58,16 @@ async function uploadToInstagram(videoPath, page) {
         const videoBuffer = await fs.readFile(videoPath);
         const coverBuffer = await fs.readFile(globalScreenshotPath);
         console.log('Starting video upload...');
-        // const publishResult = await ig.publish.video({
-        //     video: videoBuffer,
-        //     coverImage: coverBuffer,
-        //     caption: `${globalShareText}\n\n#puzzli #puzzligame #puzzle #puzzlegame #puzzlesolver #puzzleoftheday #puzzlechallenge #brainteaser #dailypuzzle #logicpuzzle`,
-        //     transcodeDelay: 15000  // Increased delay
-        // });
+        const publishResult = await ig.publish.video({
+            video: videoBuffer,
+            coverImage: coverBuffer,
+            caption: `${globalShareText}\n\n#puzzli #puzzligame #puzzle #puzzlegame #puzzlesolver #puzzleoftheday #puzzlechallenge #brainteaser #dailypuzzle #logicpuzzle`,
+            transcodeDelay: 15000
+        });
         console.log('Video upload completed!');
-        return null;
+        return publishResult;
     }
     catch (error) {
-        // Type guard for Instagram API errors
         const isIgError = (err) => {
             return typeof err === 'object' && err !== null && 'name' in err;
         };
@@ -80,6 +79,49 @@ async function uploadToInstagram(videoPath, page) {
         }
         console.error('Failed to upload to Instagram:', error);
         throw error;
+    }
+}
+function getTodayVideoPath() {
+    const estDate = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+    const formattedDate = estDate.getFullYear() + '_' +
+        String(estDate.getMonth() + 1).padStart(2, '0') + '_' +
+        String(estDate.getDate()).padStart(2, '0');
+    return `./recordings/puzzli_${formattedDate}.mp4`;
+}
+async function saveShareText(text) {
+    await fs.writeFile('./data/shareText.txt', text);
+}
+async function loadShareText() {
+    try {
+        const text = await fs.readFile('./data/shareText.txt', 'utf-8');
+        return text;
+    }
+    catch (error) {
+        return null;
+    }
+}
+async function uploadVideo(waitForInput = false) {
+    const videoPath = getTodayVideoPath();
+    try {
+        await fs.access(videoPath);
+        if (waitForInput) {
+            console.log('\nPress Enter to upload to Instagram, or Ctrl+C to exit...');
+            process.stdin.setRawMode(true);
+            await new Promise(resolve => {
+                process.stdin.once('data', data => {
+                    if (data[0] === 13 || data[0] === 10) {
+                        process.stdin.setRawMode(false);
+                        resolve();
+                    }
+                });
+            });
+        }
+        await uploadToInstagram(videoPath);
+        process.exit(0);
+    }
+    catch (error) {
+        console.error('Video not found or upload failed:', error);
+        process.exit(1);
     }
 }
 async function solvePuzzli() {
@@ -99,10 +141,8 @@ async function solvePuzzli() {
         permissions: ['clipboard-read', 'clipboard-write']
     });
     const page = await context.newPage();
-    const videoPath = await page.video()?.path();
-    // Set up console log forwarding
+    globalVideoPath = await page.video()?.path() ?? null;
     page.on('console', msg => console.log(msg.text()));
-    // Set viewport to match recording size
     await page.setViewportSize({
         width: 960,
         height: 960
@@ -110,11 +150,9 @@ async function solvePuzzli() {
     await page.goto('https://puzzligame.com');
     await page.waitForSelector('text=Start');
     await page.click('text=Start');
-    await page.waitForSelector('.tile img'); // Wait until at least one tile image is visible
+    await page.waitForSelector('.tile img');
     await page.waitForTimeout(1000);
-    // Get tile data and perform drag operation
     const tileData = await page.evaluate(async () => {
-        // Helper function to get pattern from image element
         const getPattern = (img) => {
             const pat = img.getAttribute('src')?.split('/').pop()?.split('.')[0] || '';
             const rot = parseInt(img.style.rotate || '0deg'.replace('deg', '') || '0');
@@ -127,7 +165,6 @@ async function solvePuzzli() {
         function isLeftRightValid(leftPattern, rightPattern) {
             return leftPattern[3] === rightPattern[0] && leftPattern[4] === rightPattern[7];
         }
-        // Initialize tile map: pattern -> position
         const tileMap = new Map();
         const tiles = Array.from(document.querySelectorAll('.tile img'));
         tiles.forEach((img, index) => {
@@ -165,7 +202,6 @@ async function solvePuzzli() {
                 clientY: targetY
             }));
             await new Promise(resolve => setTimeout(resolve, 40));
-            // Update our pattern tracking
             tileMap.set(pattern1, index2);
             tileMap.set(pattern2, index1);
         };
@@ -210,14 +246,12 @@ async function solvePuzzli() {
         function solutionValid(patterns) {
             for (let i = 0; i < patterns.length; i++) {
                 let pattern = patterns[i];
-                // Check left-right validity
                 if (i % 3 > 0) {
                     let leftPattern = patterns[i - 1];
                     if (!isLeftRightValid(leftPattern, pattern)) {
                         return false;
                     }
                 }
-                // Check top-bottom validity
                 if (i >= 3) {
                     let topPattern = patterns[i - 3];
                     if (!isTopBottomValid(topPattern, pattern)) {
@@ -228,21 +262,25 @@ async function solvePuzzli() {
             return true;
         }
         const tryAllCombinations = async (remainingPatterns, placedPatterns = []) => {
-            if (remainingPatterns.size === 0) {
+            if (remainingPatterns.length === 0) {
                 return true;
             }
             const currentPosition = placedPatterns.length;
-            const currentIndex = currentPosition;
-            const currentPattern = Array.from(tileMap.entries()).find(([_, index]) => index === currentIndex)?.[0] ?? '';
-            const orderedPatterns = [currentPattern, ...Array.from(remainingPatterns).filter(p => p !== currentPattern)];
-            for (const pattern of orderedPatterns) {
+            // For the first position (index 0), use random order
+            // For all other positions, keep the orderedPatterns logic
+            const patterns = currentPosition === 0
+                ? remainingPatterns
+                : (() => {
+                    const currentPattern = Array.from(tileMap.entries()).find(([_, index]) => index === currentPosition)?.[0] ?? '';
+                    return [currentPattern, ...remainingPatterns.filter(p => p !== currentPattern)];
+                })();
+            for (const pattern of patterns) {
                 if (!pattern)
-                    continue; // Skip undefined/empty patterns
+                    continue;
                 const combinationKey = [...placedPatterns, pattern].join(',');
                 if (triedCombinations.has(combinationKey)) {
                     continue;
                 }
-                // Check validity before swapping
                 let isValid = true;
                 if (currentPosition % 3 > 0) {
                     isValid = isValid && isLeftRightValid(placedPatterns[placedPatterns.length - 1], pattern);
@@ -252,13 +290,12 @@ async function solvePuzzli() {
                 }
                 if (isValid) {
                     const patternCurrentPos = Array.from(tileMap.entries())
-                        .find(([_, index]) => index === currentIndex)?.[0];
+                        .find(([_, index]) => index === currentPosition)?.[0];
                     if (patternCurrentPos !== pattern) {
-                        await swapTiles(patternCurrentPos, pattern, currentIndex);
+                        await swapTiles(patternCurrentPos, pattern, currentPosition);
                     }
-                    const allPatterns = [...placedPatterns, ...Array.from(remainingPatterns)];
+                    const allPatterns = [...placedPatterns, ...remainingPatterns];
                     if (solutionValid(allPatterns)) {
-                        // Highlight all tiles in current valid solution with fade out
                         for (const pat of allPatterns) {
                             highlightMatchedTile(pat, true, true);
                         }
@@ -267,8 +304,7 @@ async function solvePuzzli() {
                     else {
                         triedCombinations.add(combinationKey);
                         highlightMatchedTile(pattern);
-                        const newRemaining = new Set(remainingPatterns);
-                        newRemaining.delete(pattern);
+                        const newRemaining = remainingPatterns.filter(p => p !== pattern);
                         const newPlaced = [...placedPatterns, pattern];
                         if (await tryAllCombinations(newRemaining, newPlaced)) {
                             return true;
@@ -279,15 +315,15 @@ async function solvePuzzli() {
             }
             return false;
         };
-        // Start solving with all patterns
-        const allPatterns = new Set(Array.from(tileMap.keys()));
+        const allPatterns = Array.from(tileMap.keys())
+            .sort(() => Math.random() - 0.5);
+        console.log(allPatterns);
         const found = await tryAllCombinations(allPatterns);
         return {
             patterns: Array.from(tileMap.entries()),
             solutionFound: found
         };
     });
-    // Print in Node.js context
     console.log("\n=== Final Results ===");
     console.log(`Solution ${tileData.solutionFound ? "was found! 🎉" : "was NOT found ❌"}`);
     console.log("\nFinal tile positions:");
@@ -296,18 +332,18 @@ async function solvePuzzli() {
     });
     console.log("Puzzli bot executed successfully!");
     await page.waitForTimeout(2000);
-    // Get share text and take screenshot before closing context
     await page.click('text=Share Results');
     await page.waitForTimeout(250);
     globalShareText = await page.evaluate(async () => {
-        // Get clipboard text
         const clipboardText = await navigator.clipboard.readText();
         return clipboardText;
     });
-    // Close the modal
+    // Save the share text after getting it
+    if (globalShareText) {
+        await saveShareText(globalShareText);
+    }
     await page.click('.btn-close');
     await page.waitForTimeout(500);
-    // Before taking the screenshot, scale up the tiles
     await page.evaluate(() => {
         const tiles = document.querySelectorAll('.tile');
         tiles.forEach(tile => {
@@ -315,49 +351,52 @@ async function solvePuzzli() {
             tile.style.transform = 'scale(1.015)';
         });
     });
-    // Wait for the animation to complete
     await page.waitForTimeout(300);
-    // Take screenshot after tiles are scaled
     await page.screenshot({
         path: globalScreenshotPath,
         clip: {
-            x: 55, // Centers horizontally: (960 - 850) / 2
-            y: 120, // Adjusted to keep puzzle centered vertically
+            x: 55,
+            y: 120,
             width: 850,
             height: 850
         }
     });
-    await context.close(); // Close context after getting share text and screenshot
-    if (videoPath) {
-        const estDate = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
-        const formattedDate = estDate.getFullYear() + '_' +
-            String(estDate.getMonth() + 1).padStart(2, '0') + '_' +
-            String(estDate.getDate()).padStart(2, '0');
-        const newVideoPath = `./recordings/puzzli_${formattedDate}.mp4`;
-        const trimmedVideoPath = `./recordings/puzzli_${formattedDate}_trimmed.mp4`;
-        await fs.rename(videoPath, newVideoPath);
+    await context.close();
+    await browser.close();
+    if (globalVideoPath) {
+        const newVideoPath = getTodayVideoPath();
+        const trimmedVideoPath = newVideoPath.replace('.mp4', '_trimmed.mp4');
+        await fs.rename(globalVideoPath, newVideoPath);
         console.log(`Video recording saved to ${newVideoPath}`);
-        // Get video duration first
-        const durationResult = await (0, utils_js_1.execAsync)(`"C:\\Program Files\\ffmpeg-7.1.1-essentials_build\\bin\\ffmpeg.exe" -i "${newVideoPath}" 2>&1 | findstr "Duration"`);
+        const durationResult = await (0, utils_1.execAsync)(`"C:\\Program Files\\ffmpeg-7.1.1-essentials_build\\bin\\ffmpeg.exe" -i "${newVideoPath}" 2>&1 | findstr "Duration"`);
         const durationMatch = durationResult.stdout.match(/Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})/);
         const videoDuration = durationMatch ?
             parseInt(durationMatch[1]) * 3600 +
                 parseInt(durationMatch[2]) * 60 +
                 parseInt(durationMatch[3]) +
                 parseInt(durationMatch[4]) / 100 : 0;
-        // Trim from both start and end
-        await (0, utils_js_1.execAsync)(`"C:\\Program Files\\ffmpeg-7.1.1-essentials_build\\bin\\ffmpeg.exe" -i "${newVideoPath}" -ss 2.05 -t ${videoDuration - 3.75} -vf "crop=810:810:75:140" -c:v libx264 "${trimmedVideoPath}"`);
+        await (0, utils_1.execAsync)(`"C:\\Program Files\\ffmpeg-7.1.1-essentials_build\\bin\\ffmpeg.exe" -i "${newVideoPath}" -ss 2.07 -t ${videoDuration - 3.75} -vf "crop=810:810:75:140" -c:v libx264 "${trimmedVideoPath}"`);
         console.log(`Trimmed video saved to ${trimmedVideoPath}`);
-        // Replace original with trimmed version
         await fs.unlink(newVideoPath);
         await fs.rename(trimmedVideoPath, newVideoPath);
-        try {
-            await uploadToInstagram(newVideoPath, page);
-        }
-        catch (error) {
-            console.error('Instagram upload failed:', error);
-        }
     }
-    await browser.close();
 }
-solvePuzzli();
+async function main() {
+    console.log('Starting Puzzli bot...');
+    const args = process.argv.slice(2);
+    const shouldSolve = args.includes('--solve') || args.includes('-s');
+    const shouldUpload = args.includes('--upload') || args.includes('-u');
+    // If no args provided, do both by default and wait for input
+    if (args.length === 0) {
+        await solvePuzzli();
+        await uploadVideo(true);
+        return;
+    }
+    if (shouldSolve) {
+        await solvePuzzli();
+    }
+    if (shouldUpload) {
+        await uploadVideo(false);
+    }
+}
+main();

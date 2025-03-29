@@ -2,11 +2,12 @@ import { chromium, Page } from 'playwright';
 import * as fs from 'fs/promises';
 import { IgApiClient } from 'instagram-private-api';
 import * as dotenv from 'dotenv';
-import { execAsync } from './utils.js';
+import { execAsync } from './utils';
 
 dotenv.config();
 
 let globalShareText: string | null = null;
+let globalVideoPath: string | null = null;
 let globalScreenshotPath = `screenshots/completed-puzzle_${new Date().toLocaleString("en-US", {timeZone: "America/New_York"})
 	.split(',')[0]
 	.replace(/\//g, '_')}.png`;
@@ -55,6 +56,70 @@ async function uploadToInstagram(videoPath: string) {
     }
 }
 
+function getTodayVideoPath(): string {
+    const estDate = new Date(new Date().toLocaleString("en-US", {timeZone: "America/New_York"}));
+    const formattedDate = estDate.getFullYear() + '_' + 
+        String(estDate.getMonth() + 1).padStart(2, '0') + '_' + 
+        String(estDate.getDate()).padStart(2, '0');
+    return `./recordings/puzzli_${formattedDate}.mp4`;
+}
+
+async function saveShareText(text: string) {
+    await fs.writeFile('./data/shareText.txt', text);
+}
+
+async function loadShareText(): Promise<string | null> {
+    try {
+        const text = await fs.readFile('./data/shareText.txt', 'utf-8');
+        return text;
+    } catch (error) {
+        return null;
+    }
+}
+
+async function uploadVideo(waitForInput: boolean = false) {
+    const videoPath = getTodayVideoPath();
+    const maxRetries = 5;
+    let retryCount = 0;
+
+    try {
+        await fs.access(videoPath);
+        
+        if (waitForInput) {
+            console.log('\nPress Enter to upload to Instagram, or Ctrl+C to exit...');
+            process.stdin.setRawMode(true);
+            await new Promise<void>(resolve => {
+                process.stdin.once('data', data => {
+                    if (data[0] === 13 || data[0] === 10) {
+                        process.stdin.setRawMode(false);
+                        resolve();
+                    }
+                });
+            });
+        }
+
+        while (retryCount < maxRetries) {
+            try {
+                await uploadToInstagram(videoPath);
+                console.log('Upload successful!');
+                process.exit(0);
+            } catch (error) {
+                retryCount++;
+                if (retryCount === maxRetries) {
+                    console.error(`Failed to upload after ${maxRetries} attempts`);
+                    process.exit(1);
+                }
+                console.log(`Upload failed, retrying (attempt ${retryCount}/${maxRetries})...`);
+                // Wait 5 seconds before retrying
+                await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+        }
+    } catch (error) {
+        console.error('Video not found:', error);
+        process.exit(1);
+    }
+}
+
 async function solvePuzzli() {
 	const browser = await chromium.launch({
 		headless: false,
@@ -73,7 +138,7 @@ async function solvePuzzli() {
 		permissions: ['clipboard-read', 'clipboard-write']
 	});
 	const page: Page = await context.newPage();
-	const videoPath = await page.video()?.path();
+	globalVideoPath = await page.video()?.path() ?? null;
 	
 	page.on('console', msg => console.log(msg.text()));
 
@@ -222,19 +287,25 @@ async function solvePuzzli() {
 		}
 
 		const tryAllCombinations = async (
-			remainingPatterns: Set<string>,
+			remainingPatterns: string[],
 			placedPatterns: string[] = []
 		): Promise<boolean> => {
-			if (remainingPatterns.size === 0) {
+			if (remainingPatterns.length === 0) {
 				return true;
 			}
 
 			const currentPosition = placedPatterns.length;
 
-			const currentPattern = Array.from(tileMap.entries()).find(([_, index]) => index === currentPosition)?.[0] ?? '';
-			const orderedPatterns = [currentPattern, ...Array.from(remainingPatterns).filter(p => p !== currentPattern)];
+			// For the first position (index 0), use random order
+			// For all other positions, keep the orderedPatterns logic
+			const patterns = currentPosition === 0 
+				? remainingPatterns 
+				: (() => {
+					const currentPattern = Array.from(tileMap.entries()).find(([_, index]) => index === currentPosition)?.[0] ?? '';
+					return [currentPattern, ...remainingPatterns.filter(p => p !== currentPattern)];
+				})();
 
-			for (const pattern of orderedPatterns) {
+			for (const pattern of patterns) {
 				if (!pattern) continue;
 				const combinationKey = [...placedPatterns, pattern].join(',');
 				
@@ -254,12 +325,11 @@ async function solvePuzzli() {
 					const patternCurrentPos = Array.from(tileMap.entries())
 						.find(([_, index]) => index === currentPosition)?.[0];
 					
-
 					if (patternCurrentPos !== pattern) {
 						await swapTiles(patternCurrentPos!, pattern, currentPosition);
 					}
 
-					const allPatterns = [...placedPatterns, ...Array.from(remainingPatterns)];
+					const allPatterns = [...placedPatterns, ...remainingPatterns];
 					if (solutionValid(allPatterns)) {
 						for (const pat of allPatterns) {
 							highlightMatchedTile(pat, true, true);
@@ -268,15 +338,14 @@ async function solvePuzzli() {
 					} else {
 						triedCombinations.add(combinationKey);
 						highlightMatchedTile(pattern);
-	
-						const newRemaining = new Set(remainingPatterns);
-						newRemaining.delete(pattern);
+
+						const newRemaining = remainingPatterns.filter(p => p !== pattern);
 						const newPlaced = [...placedPatterns, pattern];
-	
+
 						if (await tryAllCombinations(newRemaining, newPlaced)) {
 							return true;
 						}
-	
+
 						highlightMatchedTile(pattern, false);
 					}
 				}
@@ -285,7 +354,9 @@ async function solvePuzzli() {
 			return false;
 		};
 
-		const allPatterns = new Set(Array.from(tileMap.keys()));
+		const allPatterns = Array.from(tileMap.keys())
+			.sort(() => Math.random() - 0.5);
+		console.log(allPatterns);
 		const found = await tryAllCombinations(allPatterns);
 
 		return { 
@@ -312,6 +383,11 @@ async function solvePuzzli() {
 		return clipboardText;
 	});
 
+	// Save the share text after getting it
+	if (globalShareText) {
+		await saveShareText(globalShareText);
+	}
+
 	await page.click('.btn-close');
 	await page.waitForTimeout(500);
 
@@ -336,16 +412,13 @@ async function solvePuzzli() {
 	});
 
 	await context.close();
+	await browser.close();
 
-	if (videoPath) {
-		const estDate = new Date(new Date().toLocaleString("en-US", {timeZone: "America/New_York"}));
-		const formattedDate = estDate.getFullYear() + '_' + 
-			String(estDate.getMonth() + 1).padStart(2, '0') + '_' + 
-			String(estDate.getDate()).padStart(2, '0');
-		const newVideoPath = `./recordings/puzzli_${formattedDate}.mp4`;
-		const trimmedVideoPath = `./recordings/puzzli_${formattedDate}_trimmed.mp4`;
+	if (globalVideoPath) {
+		const newVideoPath = getTodayVideoPath();
+		const trimmedVideoPath = newVideoPath.replace('.mp4', '_trimmed.mp4');
 		
-		await fs.rename(videoPath, newVideoPath);
+		await fs.rename(globalVideoPath, newVideoPath);
 		console.log(`Video recording saved to ${newVideoPath}`);
 
 		const durationResult = await execAsync(`"C:\\Program Files\\ffmpeg-7.1.1-essentials_build\\bin\\ffmpeg.exe" -i "${newVideoPath}" 2>&1 | findstr "Duration"`);
@@ -356,20 +429,34 @@ async function solvePuzzli() {
 			parseInt(durationMatch[3]) + 
 			parseInt(durationMatch[4]) / 100 : 0;
 
-		await execAsync(`"C:\\Program Files\\ffmpeg-7.1.1-essentials_build\\bin\\ffmpeg.exe" -i "${newVideoPath}" -ss 2.05 -t ${videoDuration - 3.75} -vf "crop=810:810:75:140" -c:v libx264 "${trimmedVideoPath}"`);
+		await execAsync(`"C:\\Program Files\\ffmpeg-7.1.1-essentials_build\\bin\\ffmpeg.exe" -i "${newVideoPath}" -ss 2.07 -t ${videoDuration - 3.75} -vf "crop=810:810:75:140" -c:v libx264 "${trimmedVideoPath}"`);
 		console.log(`Trimmed video saved to ${trimmedVideoPath}`);
 		
 		await fs.unlink(newVideoPath);
 		await fs.rename(trimmedVideoPath, newVideoPath);
-
-		try {
-			await uploadToInstagram(newVideoPath);
-		} catch (error) {
-			console.error('Instagram upload failed:', error);
-		}
 	}
-
-	await browser.close();
 }
 
-solvePuzzli();
+async function main() {
+	console.log('Starting Puzzli bot...');
+  const args = process.argv.slice(2);
+  const shouldSolve = args.includes('--solve') || args.includes('-s');
+  const shouldUpload = args.includes('--upload') || args.includes('-u');
+
+  // If no args provided, do both by default and wait for input
+  if (args.length === 0) {
+      await solvePuzzli();
+      await uploadVideo(true);
+      return;
+  }
+
+  if (shouldSolve) {
+      await solvePuzzli();
+  }
+
+  if (shouldUpload) {
+      await uploadVideo(false);
+  }
+}
+
+main();
