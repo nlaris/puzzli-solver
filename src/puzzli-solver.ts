@@ -29,7 +29,12 @@ async function uploadToInstagram(videoPath: string) {
         console.log('Preparing video upload...');
         const videoBuffer = await fs.readFile(videoPath);
         const coverBuffer = await fs.readFile(globalScreenshotPath);
-        
+        if (!globalShareText) {
+            globalShareText = await loadShareText();
+            if (!globalShareText) {
+                throw new Error('Share text is not available');
+            }
+        }
         console.log('Starting video upload...');
         const publishResult = await ig.publish.video({
             video: videoBuffer,

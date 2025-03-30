@@ -57,6 +57,12 @@ async function uploadToInstagram(videoPath) {
         console.log('Preparing video upload...');
         const videoBuffer = await fs.readFile(videoPath);
         const coverBuffer = await fs.readFile(globalScreenshotPath);
+        if (!globalShareText) {
+            globalShareText = await loadShareText();
+            if (!globalShareText) {
+                throw new Error('Share text is not available');
+            }
+        }
         console.log('Starting video upload...');
         const publishResult = await ig.publish.video({
             video: videoBuffer,
@@ -109,11 +115,17 @@ async function uploadVideo(waitForInput = false) {
         if (waitForInput) {
             console.log('\nPress Enter to upload to Instagram, or Ctrl+C to exit...');
             process.stdin.setRawMode(true);
-            await new Promise(resolve => {
+            await new Promise((resolve, reject) => {
                 process.stdin.once('data', data => {
                     if (data[0] === 13 || data[0] === 10) {
                         process.stdin.setRawMode(false);
                         resolve();
+                    }
+                    // Handle Ctrl+C (character code 3)
+                    if (data[0] === 3) {
+                        process.stdin.setRawMode(false);
+                        console.log('\nCancelled upload');
+                        process.exit(0);
                     }
                 });
             });
@@ -131,7 +143,6 @@ async function uploadVideo(waitForInput = false) {
                     process.exit(1);
                 }
                 console.log(`Upload failed, retrying (attempt ${retryCount}/${maxRetries})...`);
-                // Wait 5 seconds before retrying
                 await new Promise(resolve => setTimeout(resolve, 5000));
             }
         }
