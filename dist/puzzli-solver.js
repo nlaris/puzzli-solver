@@ -102,6 +102,8 @@ async function loadShareText() {
 }
 async function uploadVideo(waitForInput = false) {
     const videoPath = getTodayVideoPath();
+    const maxRetries = 5;
+    let retryCount = 0;
     try {
         await fs.access(videoPath);
         if (waitForInput) {
@@ -116,11 +118,26 @@ async function uploadVideo(waitForInput = false) {
                 });
             });
         }
-        await uploadToInstagram(videoPath);
-        process.exit(0);
+        while (retryCount < maxRetries) {
+            try {
+                await uploadToInstagram(videoPath);
+                console.log('Upload successful!');
+                process.exit(0);
+            }
+            catch (error) {
+                retryCount++;
+                if (retryCount === maxRetries) {
+                    console.error(`Failed to upload after ${maxRetries} attempts`);
+                    process.exit(1);
+                }
+                console.log(`Upload failed, retrying (attempt ${retryCount}/${maxRetries})...`);
+                // Wait 5 seconds before retrying
+                await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+        }
     }
     catch (error) {
-        console.error('Video not found or upload failed:', error);
+        console.error('Video not found:', error);
         process.exit(1);
     }
 }

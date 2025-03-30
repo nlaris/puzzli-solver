@@ -88,11 +88,17 @@ async function uploadVideo(waitForInput: boolean = false) {
         if (waitForInput) {
             console.log('\nPress Enter to upload to Instagram, or Ctrl+C to exit...');
             process.stdin.setRawMode(true);
-            await new Promise<void>(resolve => {
+            await new Promise<void>((resolve, reject) => {
                 process.stdin.once('data', data => {
                     if (data[0] === 13 || data[0] === 10) {
                         process.stdin.setRawMode(false);
                         resolve();
+                    }
+                    // Handle Ctrl+C (character code 3)
+                    if (data[0] === 3) {
+                        process.stdin.setRawMode(false);
+                        console.log('\nCancelled upload');
+                        process.exit(0);
                     }
                 });
             });
@@ -110,7 +116,6 @@ async function uploadVideo(waitForInput: boolean = false) {
                     process.exit(1);
                 }
                 console.log(`Upload failed, retrying (attempt ${retryCount}/${maxRetries})...`);
-                // Wait 5 seconds before retrying
                 await new Promise(resolve => setTimeout(resolve, 5000));
             }
         }
