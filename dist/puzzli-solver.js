@@ -175,7 +175,12 @@ async function solvePuzzli() {
         width: 960,
         height: 960
     });
-    await page.goto('https://puzzligame.com');
+    // await page.goto('https://puzzligame.com');
+    await page.goto('http://localhost:3000/');
+    await page.evaluate(() => {
+        const randomNum = Math.floor(Math.random() * 1000000);
+        localStorage.setItem('userId', JSON.stringify(`SOLVER_${randomNum}`));
+    });
     await page.waitForSelector('text=Start');
     await page.click('text=Start');
     await page.waitForSelector('.tile img');
@@ -345,7 +350,6 @@ async function solvePuzzli() {
         };
         const allPatterns = Array.from(tileMap.keys())
             .sort(() => Math.random() - 0.5);
-        console.log(allPatterns);
         const found = await tryAllCombinations(allPatterns);
         return {
             patterns: Array.from(tileMap.entries()),
