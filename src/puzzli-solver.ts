@@ -159,6 +159,11 @@ async function solvePuzzli() {
 
 	await page.goto('https://puzzligame.com');
 
+	await page.evaluate(() => {
+		const randomNum = Math.floor(Math.random() * 1000000);
+		localStorage.setItem('userId', JSON.stringify(`SOLVER_${randomNum}`));
+	});
+
 	await page.waitForSelector('text=Start');
 	await page.click('text=Start');
 
@@ -366,7 +371,6 @@ async function solvePuzzli() {
 
 		const allPatterns = Array.from(tileMap.keys())
 			.sort(() => Math.random() - 0.5);
-		console.log(allPatterns);
 		const found = await tryAllCombinations(allPatterns);
 
 		return { 
